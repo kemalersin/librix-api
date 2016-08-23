@@ -26,6 +26,8 @@ var CorporationSchema = new Schema({
       endDate: Date
     }]
   }]
+}, {
+  timestamps: true
 });
 
 var models = {

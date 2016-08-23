@@ -3,7 +3,9 @@
 const TOKEN_DURATION = 20;
 
 const messages = {
-  CLIENT_NOT_FOUND: 'Client not found.'
+  CODE_ALREADY_USED: 'Code already used.',
+  CLIENT_NOT_FOUND: 'Client not found.',
+  TOKEN_NOT_FOUND: 'Token not found.'
 }
 
 var _ = require('lodash');
@@ -35,6 +37,7 @@ function handleEntityNotFound(res, err) {
 function saveUpdates(updates) {
   return function (entity) {
     var updated = _.merge(entity, updates);
+
     return updated.saveAsync()
       .spread(function (updated) {
         return updated;
@@ -98,8 +101,7 @@ module.exports = {
             })
             .catch(handleError(res));
         }
-      })
-      .catch(handleError(res));
+      });
   },
 
   createClient: function (req, res) {
@@ -107,6 +109,39 @@ module.exports = {
   },
 
   updateClient: function (req, res) {
+    var data = req.body;
+    var code = data.code;
+    var token = data.token;
 
+    if (!code || !token) {
+      res.status(400).end();
+    }
+    else {
+      Corporation.findOneAsync({
+        'clients.token': token,
+        'clients.tokenEndDate': {'$gte': moment()}
+      })
+        .then(handleEntityNotFound(res, messages.TOKEN_NOT_FOUND))
+        .then(function (corporation) {
+          if (corporation) {
+            Corporation.findOneAsync({
+              code,
+              'clients.token': {'$ne': token}
+            })
+              .then(function (entity) {
+                if (entity) {
+                  throw(messages.CODE_ALREADY_USED);
+                }
+
+                return corporation;
+              })
+              .then(saveUpdates(data))
+              .then(function () {
+                res.status(200).end();
+              })
+              .catch(handleError(res));
+          }
+        });
+    }
   }
 }
