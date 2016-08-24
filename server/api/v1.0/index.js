@@ -8,6 +8,7 @@ var router = express.Router();
 router.get('/client/:consumerKey', controller.getClient);
 router.post('/client', controller.createClient);
 router.put('/client', controller.updateClient);
+router.post('/unlink', controller.unlinkLicense);
 router.get('/token/:consumerKey', controller.getToken);
 
 module.exports = router;
