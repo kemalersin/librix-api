@@ -3,8 +3,8 @@
 var mongoose = require('bluebird').promisifyAll(require('mongoose'));
 var Schema = mongoose.Schema;
 
-var LicenseKeySchema = new Schema({
-  key: String,
+var LicenseSchema = new Schema({
+  licenseKey: String,
   used: Boolean
 });
 
@@ -18,6 +18,7 @@ var CorporationSchema = new Schema({
     consumerKey: String,
     licenseKey: String,
     disabled: Boolean,
+    unlinkDate: Date,
     token: String,
     tokenGivenDate: Date,
     tokenEndDate: Date,
@@ -31,7 +32,7 @@ var CorporationSchema = new Schema({
 });
 
 var models = {
-  LicenseKey: mongoose.model('LicenseKey', LicenseKeySchema),
+  License: mongoose.model('License', LicenseSchema),
   Corporation: mongoose.model('Corporation', CorporationSchema)
 };
 

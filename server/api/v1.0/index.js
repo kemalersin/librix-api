@@ -9,6 +9,7 @@ router.get('/corporation/:code', controller.getCorporation);
 router.get('/client/:consumerKey', controller.getClient);
 router.post('/client', controller.createClient);
 router.put('/client', controller.updateClient);
+router.post('/link', controller.linkLicense);
 router.post('/unlink', controller.unlinkLicense);
 router.get('/token/:consumerKey', controller.getToken);
 
