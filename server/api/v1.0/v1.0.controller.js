@@ -1,9 +1,12 @@
 'use strict';
 
 const TOKEN_DURATION = 20;
+const CORPORATION_SAFE_KEYS =
+  ['code', 'description', 'town', 'city', 'banned'];
 
 const messages = {
   CODE_ALREADY_USED: 'Code already used.',
+  CORPORATION_NOT_FOUND: 'Corporation not found',
   CLIENT_NOT_FOUND: 'Client not found.',
   TOKEN_NOT_FOUND: 'Token not found.'
 }
@@ -46,6 +49,23 @@ function saveUpdates(updates) {
 }
 
 module.exports = {
+  getCorporation: function (req, res) {
+    var code = req.params.code;
+
+    Corporation.findOneAsync({code})
+      .then(handleEntityNotFound(res, messages.CORPORATION_NOT_FOUND))
+      .then(function (corporation) {
+        if (corporation) {
+          res.status(200).json(
+            _.pick(
+              corporation,
+              CORPORATION_SAFE_KEYS
+            )
+          );
+        }
+      });
+  },
+
   getClient: function (req, res) {
     var consumerKey = req.params.consumerKey;
 
@@ -61,7 +81,7 @@ module.exports = {
 
           res.status(200).json(
             _.chain(corporation)
-              .pick(['code', 'description', 'town', 'city', 'banned'])
+              .pick(CORPORATION_SAFE_KEYS)
               .assignIn({
                 licenseKey: client.licenseKey,
                 begDate: period.begDate,
@@ -79,12 +99,12 @@ module.exports = {
 
     if (!token) {
       res.status(400).end();
-      return;
     }
 
     Corporation.findOneAsync({
+      'clients.disabled': {'$ne': true},
       'clients.token': token,
-      'clients.tokenEndDate': {'$gte': moment()}
+      'clients.tokenEndDate': {'$gte': moment()},
     })
       .then(handleEntityNotFound(res, messages.TOKEN_NOT_FOUND))
       .then(function (corporation) {
@@ -143,7 +163,6 @@ module.exports = {
 
     if (!code || !token) {
       res.status(400).end();
-      return;
     }
 
     Corporation.findOneAsync({
