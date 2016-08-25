@@ -8,12 +8,12 @@ var router = express.Router();
 
 router.post('/auth', controller.authenticate);
 
-router.use(function (req, res, next) {
+router.use((req, res, next) => {
   var token = req.headers['x-access-token'];
   var consumerKey = req.headers['consumer-key'];
 
   if (token && consumerKey) {
-    jwt.verify(token, process.env.APP_SECRET, function (err) {
+    jwt.verify(token, process.env.APP_SECRET, err => {
       if (err) {
         return res.sendStatus(401);
       }
@@ -28,11 +28,11 @@ router.use(function (req, res, next) {
   }
 });
 
-router.get('/corporation/:code', controller.getCorporation);
 router.get('/client', controller.getClient);
-router.post('/client', controller.createClient);
-router.put('/client', controller.updateClient);
-router.post('/link', controller.linkLicense);
-router.post('/unlink', controller.unlinkLicense);
+router.post('/client/link', controller.linkClient);
+router.post('/client/unlink', controller.unlinkClient);
+router.get('/corporation/:code', controller.getCorporation);
+router.post('/corporation', controller.createCorporation);
+router.put('/corporation', controller.updateCorporation);
 
 module.exports = router;

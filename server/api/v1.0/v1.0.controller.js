@@ -2,21 +2,22 @@
 
 const LICENSE_DURATION = 365;
 const CORPORATION_SAFE_KEYS =
-  ['code', 'description', 'town', 'city', 'banned'];
+  ['code', 'description', 'town', 'city'];
 
 const messages = {
   APP_NOT_FOUND: 'App not found.',
+  CODE_UNSPECIFIED: 'Code unspecified.',
   CODE_ALREADY_USED: 'Code already used.',
-  CORPORATION_NOT_FOUND: 'Corporation not found',
+  CORPORATION_NOT_FOUND: 'Corporation not found.',
+  LICENSE_KEY_NOT_FOUND: 'License key not found.',
   CLIENT_NOT_FOUND: 'Client not found.',
-  LICENSE_KEY_NOT_FOUND: 'License key not found.'
+  CLIENT_ALREADY_LINKED: 'Client already linked to another corporation.'
 }
 
 import _ from 'lodash';
 import moment from 'moment';
 import jwt from 'jsonwebtoken';
 import models from './v1.0.model';
-
 
 var License = models.License;
 var RegisteredApp = models.RegisteredApp;
@@ -25,30 +26,39 @@ var Corporation = models.Corporation;
 function handleError(res, statusCode) {
   statusCode = statusCode || 500;
 
-  return function (err) {
+  return err => {
     res.status(statusCode).send(err);
   };
 }
 
 function handleEntityNotFound(res, err) {
-  return function (entity) {
+  return entity => {
     if (!entity) {
       res.status(404).send(err);
       return null;
     }
+
     return entity;
   };
 }
 
 function saveUpdates(updates) {
-  return function (entity) {
+  return entity => {
     var updated = _.merge(entity, updates);
 
     return updated.saveAsync()
-      .spread(function (updated) {
-        return updated;
-      });
+      .spread(updated => { return updated; });
   };
+}
+
+function checkCorporationData(req) {
+  return new Promise((resolve, reject) => {
+    var data = _.pick(req.body, CORPORATION_SAFE_KEYS);
+
+    data.code ?
+      resolve(data) :
+      reject(messages.CODE_UNSPECIFIED);
+  });
 }
 
 module.exports = {
@@ -58,7 +68,7 @@ module.exports = {
       'appKey': req.body.appKey
     })
       .then(handleEntityNotFound(res, messages.APP_NOT_FOUND))
-      .then(function (app) {
+      .then(app => {
         if (app) {
           var token = jwt.sign(app, process.env.APP_SECRET, {
             expiresIn: '24h'
@@ -73,16 +83,19 @@ module.exports = {
   getCorporation: function (req, res) {
     Corporation.findOneAsync({'code': req.params.code})
       .then(handleEntityNotFound(res, messages.CORPORATION_NOT_FOUND))
-      .then(function (corporation) {
+      .then(corporation => {
         if (corporation) {
-          var clients = _.filter(corporation.clients, function (client) {
+          var clients = _.filter(corporation.clients, client => {
             return !client.disabled;
           });
 
           res.json(
             _.chain(corporation)
               .pick(CORPORATION_SAFE_KEYS)
-              .assign({activeClients: clients.length})
+              .assign({
+                banned: corporation.banned,
+                activeClients: clients.length
+              })
           );
         }
       })
@@ -106,7 +119,7 @@ module.exports = {
       'clients.$': 1
     })
       .then(handleEntityNotFound(res, messages.CLIENT_NOT_FOUND))
-      .then(function (corporation) {
+      .then(corporation => {
         if (corporation) {
           var client = _.first(corporation.clients);
           var period = _.last(client.licensePeriods);
@@ -115,6 +128,7 @@ module.exports = {
             _.chain(corporation)
               .pick(CORPORATION_SAFE_KEYS)
               .assignIn({
+                banned: corporation.banned,
                 licenseKey: client.licenseKey,
                 begDate: period.begDate,
                 endDate: period.endDate,
@@ -126,7 +140,7 @@ module.exports = {
       .catch(handleError(res));
   },
 
-  linkLicense: function (req, res) {
+  linkClient: function (req, res) {
     var code = req.body.code;
     var licenseKey = req.body.licenseKey;
 
@@ -134,65 +148,79 @@ module.exports = {
       return res.sendStatus(400);
     }
 
-    Corporation.findOneAsync({code, 'banned': {'$ne': true}})
-      .then(handleEntityNotFound(res, messages.CORPORATION_NOT_FOUND))
-      .then(function (corporation) {
-        if (!corporation) return;
+    Corporation.findOneAsync({
+      'clients': {
+        '$elemMatch': {
+          'disabled': {'$ne': true},
+          'consumerKey': req.consumerKey
+        }
+      }
+    })
+      .then(client => {
+        if (client) {
+          return res.status(403)
+            .send(messages.CLIENT_ALREADY_LINKED);
+        }
 
-        License.findOneAndUpdateAsync(
-          {licenseKey, 'used': {'$ne': true}},
-          {'$set': {'used': true}}
-        )
-          .then(handleEntityNotFound(res, messages.LICENSE_KEY_NOT_FOUND))
-          .then(function (license) {
-            if (!license) return;
+        Corporation.findOneAsync({code, 'banned': {'$ne': true}})
+          .then(handleEntityNotFound(res, messages.CORPORATION_NOT_FOUND))
+          .then(corporation => {
+            if (!corporation) return;
 
-            Corporation.aggregateAsync(
-              {
-                '$match': {
-                  'clients': {
-                    '$elemMatch': {
-                      'licenseKey': licenseKey,
-                      'unlinkDate': {'$exists': true, '$ne': null}
-                    }
-                  }
-                }
-              },
-              {'$unwind': '$clients'},
-              {'$sort': {'clients.unlinkDate': -1}},
-              {'$limit': 1}
+            License.findOneAndUpdateAsync(
+              {licenseKey, 'used': {'$ne': true}},
+              {'$set': {'used': true}}
             )
-              .then(function (entity) {
-                var data = entity[0],
-                  begDate = moment(),
-                  endDate = moment(begDate).add(LICENSE_DURATION, 'days');
+              .then(handleEntityNotFound(res, messages.LICENSE_KEY_NOT_FOUND))
+              .then(license => {
+                if (!license) return;
 
-                if (data) {
-                  var period = _.last(data.clients.licensePeriods);
+                Corporation.aggregateAsync(
+                  {
+                    '$match': {
+                      'clients': {
+                        '$elemMatch': {
+                          'licenseKey': licenseKey,
+                          'unlinkDate': {'$exists': true, '$ne': null}
+                        }
+                      }
+                    }
+                  },
+                  {'$unwind': '$clients'},
+                  {'$sort': {'clients.unlinkDate': -1}},
+                  {'$limit': 1}
+                )
+                  .then(entity => {
+                    var data = entity[0],
+                      begDate = moment(),
+                      endDate = moment(begDate).add(LICENSE_DURATION, 'days');
 
-                  begDate = period.begDate;
-                  endDate = period.endDate;
-                }
+                    if (data) {
+                      var period = _.last(data.clients.licensePeriods);
 
-                corporation.clients.push({
-                  'consumerKey': req.consumerKey,
-                  'licenseKey': licenseKey,
-                  'licensePeriods': [{begDate, endDate}]
-                });
+                      begDate = period.begDate;
+                      endDate = period.endDate;
+                    }
 
-                corporation.saveAsync()
-                  .then(function () {
-                    res.sendStatus(200);
-                  })
-                  .catch(handleError(res));
-              });
+                    corporation.clients.push({
+                      'consumerKey': req.consumerKey,
+                      'licenseKey': licenseKey,
+                      'licensePeriods': [{begDate, endDate}]
+                    });
+
+                    corporation.saveAsync()
+                      .then(() => { res.sendStatus(200); })
+                      .catch(handleError(res));
+                  });
+              })
+              .catch(handleError(res));
           })
           .catch(handleError(res));
       })
       .catch(handleError(res));
   },
 
-  unlinkLicense: function (req, res) {
+  unlinkClient: function (req, res) {
     Corporation.findOneAndUpdateAsync(
       {
         'clients': {
@@ -210,14 +238,16 @@ module.exports = {
       }
     )
       .then(handleEntityNotFound(res, messages.CLIENT_NOT_FOUND))
-      .then(function (updated) {
+      .then(updated => {
         if (updated) {
-          var licenseKey = updated.clients[0].licenseKey;
+          var client = _.find(updated.clients, c => {
+            return !c.disabled && c.consumerKey === req.consumerKey
+          });
 
-          License.updateAsync({licenseKey}, {'used': false})
-            .then(function () {
-              res.sendStatus(200);
-            })
+          License.updateAsync(
+            {'licenseKey': client.licenseKey},
+            {'used': false})
+            .then(() => { res.sendStatus(200); })
             .catch(handleError(res));
         }
 
@@ -225,46 +255,61 @@ module.exports = {
       .catch(handleError(res));
   },
 
-  createClient: function (req, res) {
+  createCorporation: function (req, res) {
+    checkCorporationData(req)
+      .then(data => {
+        Corporation.findOneAsync({
+          'code': data.code
+        })
+          .then(entity => {
+            if (entity) {
+              return res.status(403)
+                .send(messages.CODE_ALREADY_USED);
+            }
 
-  },
+            var corporation = new Corporation(data);
 
-  updateClient: function (req, res) {
-    var data = req.body;
-
-    if (!data.code) {
-      return res.sendStatus(400);
-    }
-
-    Corporation.findOneAsync({
-      'clients': {
-        '$elemMatch': {
-          'disabled': {'$ne': true},
-          'consumerKey': req.consumerKey
-        }
-      }
-    })
-      .then(handleEntityNotFound(res, messages.CLIENT_NOT_FOUND))
-      .then(function (corporation) {
-        if (corporation) {
-          Corporation.findOneAsync({
-            'code': data.code,
-            '_id': {'$ne': corporation._id}
+            corporation.saveAsync()
+              .then(() => { res.sendStatus(200); })
+              .catch(handleError(res));
           })
-            .then(function (entity) {
-              if (entity) {
-                throw(messages.CODE_ALREADY_USED);
-              }
-
-              return corporation;
-            })
-            .then(saveUpdates(data))
-            .then(function () {
-              res.sendStatus(200);
-            })
-            .catch(handleError(res));
-        }
+          .catch(handleError(res));
       })
-      .catch(handleError(res));
+      .catch(handleError(res, 400));
+  },
+
+  updateCorporation: function (req, res) {
+    checkCorporationData(req)
+      .then(data => {
+        Corporation.findOneAsync({
+          'clients': {
+            '$elemMatch': {
+              'disabled': {'$ne': true},
+              'consumerKey': req.consumerKey
+            }
+          }
+        })
+          .then(handleEntityNotFound(res, messages.CLIENT_NOT_FOUND))
+          .then(corporation => {
+            if (corporation) {
+              Corporation.findOneAsync({
+                'code': data.code,
+                '_id': {'$ne': corporation._id}
+              })
+                .then(entity => {
+                  if (entity) {
+                    throw(messages.CODE_ALREADY_USED);
+                  }
+
+                  return corporation;
+                })
+                .then(saveUpdates(data))
+                .then(() => { res.sendStatus(200); })
+                .catch(handleError(res));
+            }
+          })
+          .catch(handleError(res));
+      })
+      .catch(() => { res.sendStatus(400); });
   }
 }
