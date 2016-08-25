@@ -8,6 +8,10 @@ var LicenseSchema = new Schema({
   used: Boolean
 });
 
+var RegisteredAppSchema = new Schema({
+  appKey: String
+});
+
 var CorporationSchema = new Schema({
   code: String,
   description: String,
@@ -33,6 +37,7 @@ var CorporationSchema = new Schema({
 
 var models = {
   License: mongoose.model('License', LicenseSchema),
+  RegisteredApp: mongoose.model('RegisteredApp', LicenseSchema),
   Corporation: mongoose.model('Corporation', CorporationSchema)
 };
 

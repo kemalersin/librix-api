@@ -1,24 +1,25 @@
 'use strict';
 
-const TOKEN_DURATION = 20;
 const LICENSE_DURATION = 365;
 const CORPORATION_SAFE_KEYS =
   ['code', 'description', 'town', 'city', 'banned'];
 
 const messages = {
+  APP_NOT_FOUND: 'App not found.',
   CODE_ALREADY_USED: 'Code already used.',
   CORPORATION_NOT_FOUND: 'Corporation not found',
   CLIENT_NOT_FOUND: 'Client not found.',
-  TOKEN_NOT_FOUND: 'Token not found.',
   LICENSE_KEY_NOT_FOUND: 'License key not found.'
 }
 
-var _ = require('lodash');
-var moment = require('moment');
-var uuid = require('node-uuid');
-var models = require('./v1.0.model');
+import _ from 'lodash';
+import moment from 'moment';
+import jwt from 'jsonwebtoken';
+import models from './v1.0.model';
+
 
 var License = models.License;
+var RegisteredApp = models.RegisteredApp;
 var Corporation = models.Corporation;
 
 function handleError(res, statusCode) {
@@ -51,31 +52,49 @@ function saveUpdates(updates) {
 }
 
 module.exports = {
-  getCorporation: function (req, res) {
-    var code = req.params.code;
+  authenticate: function (req, res) {
+    RegisteredApp.findOneAsync({
+      '_id': req.body.appId,
+      'appKey': req.body.appKey
+    })
+      .then(handleEntityNotFound(res, messages.APP_NOT_FOUND))
+      .then(function (app) {
+        if (app) {
+          var token = jwt.sign(app, process.env.APP_SECRET, {
+            expiresIn: '24h'
+          });
 
-    Corporation.findOneAsync({code})
+          res.json({token});
+        }
+      })
+      .catch(handleError(res));
+  },
+
+  getCorporation: function (req, res) {
+    Corporation.findOneAsync({'code': req.params.code})
       .then(handleEntityNotFound(res, messages.CORPORATION_NOT_FOUND))
       .then(function (corporation) {
         if (corporation) {
-          res.status(200).json(
-            _.pick(
-              corporation,
-              CORPORATION_SAFE_KEYS
-            )
+          var clients = _.filter(corporation.clients, function (client) {
+            return !client.disabled;
+          });
+
+          res.json(
+            _.chain(corporation)
+              .pick(CORPORATION_SAFE_KEYS)
+              .assign({activeClients: clients.length})
           );
         }
-      });
+      })
+      .catch(handleError(res));
   },
 
   getClient: function (req, res) {
-    var consumerKey = req.params.consumerKey;
-
     Corporation.findOneAsync({
       'clients': {
         '$elemMatch': {
-          'consumerKey': consumerKey,
-          'disabled': {'$ne': true}
+          'disabled': {'$ne': true},
+          'consumerKey': req.consumerKey
         }
       }
     }, {
@@ -89,10 +108,10 @@ module.exports = {
       .then(handleEntityNotFound(res, messages.CLIENT_NOT_FOUND))
       .then(function (corporation) {
         if (corporation) {
-          var client = _.head(corporation.clients);
+          var client = _.first(corporation.clients);
           var period = _.last(client.licensePeriods);
 
-          res.status(200).json(
+          res.json(
             _.chain(corporation)
               .pick(CORPORATION_SAFE_KEYS)
               .assignIn({
@@ -108,13 +127,11 @@ module.exports = {
   },
 
   linkLicense: function (req, res) {
-    var data = req.body;
-    var code = data.code;
-    var licenseKey = data.licenseKey;
-    var consumerKey = data.consumerKey;
+    var code = req.body.code;
+    var licenseKey = req.body.licenseKey;
 
     if (!code || !licenseKey) {
-      res.status(400).end();
+      return res.sendStatus(400);
     }
 
     Corporation.findOneAsync({code, 'banned': {'$ne': true}})
@@ -122,7 +139,10 @@ module.exports = {
       .then(function (corporation) {
         if (!corporation) return;
 
-        License.findOneAsync({licenseKey, 'used': {'$ne': true}})
+        License.findOneAndUpdateAsync(
+          {licenseKey, 'used': {'$ne': true}},
+          {'$set': {'used': true}}
+        )
           .then(handleEntityNotFound(res, messages.LICENSE_KEY_NOT_FOUND))
           .then(function (license) {
             if (!license) return;
@@ -154,44 +174,31 @@ module.exports = {
                   endDate = period.endDate;
                 }
 
-                license.used = true;
+                corporation.clients.push({
+                  'consumerKey': req.consumerKey,
+                  'licenseKey': licenseKey,
+                  'licensePeriods': [{begDate, endDate}]
+                });
 
-                license.saveAsync()
+                corporation.saveAsync()
                   .then(function () {
-                    corporation.clients.push({
-                      consumerKey,
-                      licenseKey,
-                      licensePeriods: [{begDate, endDate}]
-                    });
-
-                    corporation.saveAsync()
-                      .then(function () {
-                        res.status(200).send();
-                      })
-                      .catch(function (err) {
-                        throw(err);
-                      });
+                    res.sendStatus(200);
                   })
                   .catch(handleError(res));
               });
-          });
-      });
+          })
+          .catch(handleError(res));
+      })
+      .catch(handleError(res));
   },
 
   unlinkLicense: function (req, res) {
-    var token = req.body.token;
-
-    if (!token) {
-      res.status(400).end();
-    }
-
     Corporation.findOneAndUpdateAsync(
       {
         'clients': {
           '$elemMatch': {
             'disabled': {'$ne': true},
-            'token': token,
-            'tokenEndDate': {'$gte': moment()}
+            'consumerKey': req.consumerKey
           }
         }
       },
@@ -202,57 +209,18 @@ module.exports = {
         }
       }
     )
-      .then(handleEntityNotFound(res, messages.TOKEN_NOT_FOUND))
-      .then(function (updated) {
-        if (updated) {
-          var licenseKey = _.head(updated.clients).licenseKey;
-
-          License.updateAsync({licenseKey}, {'used': false})
-            .then(function () {
-              res.status(200).send();
-            })
-            .catch(function (err) {
-              throw(err);
-            });
-        }
-
-      })
-      .catch(handleError(res));
-  },
-
-  getToken: function (req, res) {
-    var consumerKey = req.params.consumerKey;
-
-    var token = uuid.v4();
-    var tokenGivenDate = moment();
-    var tokenEndDate = moment(tokenGivenDate).add(TOKEN_DURATION, 'minutes');
-
-    var data = {token, tokenGivenDate, tokenEndDate};
-
-    Corporation.findOneAndUpdateAsync(
-      {
-        'banned': {'$ne': true},
-        'clients': {
-          '$elemMatch': {
-            'consumerKey': consumerKey,
-            'disabled': {'$ne': true},
-            'licensePeriods.endDate': {'$gte': moment()}
-          }
-        }
-      },
-      {
-        '$set': {
-          'clients.$.token': token,
-          'clients.$.tokenGivenDate': tokenGivenDate,
-          'clients.$.tokenEndDate': tokenEndDate
-        }
-      }
-    )
       .then(handleEntityNotFound(res, messages.CLIENT_NOT_FOUND))
       .then(function (updated) {
         if (updated) {
-          res.status(200).json(data);
+          var licenseKey = updated.clients[0].licenseKey;
+
+          License.updateAsync({licenseKey}, {'used': false})
+            .then(function () {
+              res.sendStatus(200);
+            })
+            .catch(handleError(res));
         }
+
       })
       .catch(handleError(res));
   },
@@ -263,23 +231,25 @@ module.exports = {
 
   updateClient: function (req, res) {
     var data = req.body;
-    var code = data.code;
-    var token = data.token;
 
-    if (!code || !token) {
-      res.status(400).end();
+    if (!data.code) {
+      return res.sendStatus(400);
     }
 
     Corporation.findOneAsync({
-      'clients.token': token,
-      'clients.tokenEndDate': {'$gte': moment()}
+      'clients': {
+        '$elemMatch': {
+          'disabled': {'$ne': true},
+          'consumerKey': req.consumerKey
+        }
+      }
     })
-      .then(handleEntityNotFound(res, messages.TOKEN_NOT_FOUND))
+      .then(handleEntityNotFound(res, messages.CLIENT_NOT_FOUND))
       .then(function (corporation) {
         if (corporation) {
           Corporation.findOneAsync({
-            code,
-            'clients.token': {'$ne': token}
+            'code': data.code,
+            '_id': {'$ne': corporation._id}
           })
             .then(function (entity) {
               if (entity) {
@@ -290,10 +260,11 @@ module.exports = {
             })
             .then(saveUpdates(data))
             .then(function () {
-              res.status(200).end();
+              res.sendStatus(200);
             })
             .catch(handleError(res));
         }
-      });
+      })
+      .catch(handleError(res));
   }
 }

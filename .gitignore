@@ -1,7 +1,5 @@
 node_modules
-public
-.tmp
 .idea
 dist
-/server/config/local.env.js
 npm-debug.log
+/server/config/local.env.js
