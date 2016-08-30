@@ -28,6 +28,7 @@ router.use((req, res, next) => {
   }
 });
 
+router.get('/code', controller.getCode);
 router.get('/client', controller.getClient);
 router.post('/client/demo', controller.setDemo);
 router.post('/client/link', controller.linkClient);

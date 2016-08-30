@@ -20,6 +20,7 @@ const messages = {
 import _ from 'lodash';
 import moment from 'moment';
 import jwt from 'jsonwebtoken';
+import Hashids from 'hashids';
 import models from './v1.0.model';
 
 var License = models.License;
@@ -80,6 +81,23 @@ module.exports = {
           res.json({token});
         }
       });
+  },
+
+  getCode: (req, res) => {
+    var timeCode = new Date().getTime().toString();
+    var prefix = timeCode.substr(6, 4) * 1;
+
+    var hashids = new Hashids(
+      process.env.APP_SECRET, 0,
+      'abcdefghijklmnopqrstuvwxyz'.toUpperCase()
+    );
+
+    res.json({
+      'code': 'LBX.' +
+        hashids.encode(prefix) + '.' +
+        timeCode.substr(0, 6) + '.' +
+        timeCode.substr(6, 4)
+    });
   },
 
   getCorporation: (req, res) => {
