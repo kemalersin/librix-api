@@ -23,12 +23,10 @@ var CorporationSchema = new Schema({
     licenseKey: String,
     disabled: Boolean,
     unlinkDate: Date,
-    token: String,
-    tokenGivenDate: Date,
-    tokenEndDate: Date,
     licensePeriods: [{
       begDate: Date,
-      endDate: Date
+      endDate: Date,
+      isDemo: Boolean
     }]
   }]
 }, {

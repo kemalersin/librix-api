@@ -1,5 +1,6 @@
 'use strict';
 
+const DEMO_DURATION = 30;
 const LICENSE_DURATION = 365;
 const CORPORATION_SAFE_KEYS =
   ['code', 'description', 'town', 'city'];
@@ -9,8 +10,10 @@ const messages = {
   CODE_UNSPECIFIED: 'Code unspecified.',
   CODE_ALREADY_USED: 'Code already used.',
   CORPORATION_NOT_FOUND: 'Corporation not found.',
+  LICENSE_KEYS_OVER: 'License keys over.',
   LICENSE_KEY_NOT_FOUND: 'License key not found.',
   CLIENT_NOT_FOUND: 'Client not found.',
+  CLIENT_NOT_SUITABLE: 'Client not suitable for demo.',
   CLIENT_ALREADY_LINKED: 'Client already linked to another corporation.'
 }
 
@@ -23,7 +26,7 @@ var License = models.License;
 var RegisteredApp = models.RegisteredApp;
 var Corporation = models.Corporation;
 
-function handleError(res, statusCode) {
+var handleError = (res, statusCode) => {
   statusCode = statusCode || 500;
 
   return err => {
@@ -31,7 +34,7 @@ function handleError(res, statusCode) {
   };
 }
 
-function handleEntityNotFound(res, err) {
+var handleEntityNotFound = (res, err) => {
   return entity => {
     if (!entity) {
       res.status(404).send(err);
@@ -42,7 +45,7 @@ function handleEntityNotFound(res, err) {
   };
 }
 
-function saveUpdates(updates) {
+var saveUpdates = (updates) => {
   return entity => {
     var updated = _.merge(entity, updates);
 
@@ -51,7 +54,7 @@ function saveUpdates(updates) {
   };
 }
 
-function checkCorporationData(req) {
+var checkCorporationData = (req) => {
   return new Promise((resolve, reject) => {
     var data = _.pick(req.body, CORPORATION_SAFE_KEYS);
 
@@ -62,7 +65,7 @@ function checkCorporationData(req) {
 }
 
 module.exports = {
-  authenticate: function (req, res) {
+  authenticate: (req, res) => {
     RegisteredApp.findOneAsync({
       '_id': req.body.appId,
       'appKey': req.body.appKey
@@ -76,11 +79,10 @@ module.exports = {
 
           res.json({token});
         }
-      })
-      .catch(handleError(res));
+      });
   },
 
-  getCorporation: function (req, res) {
+  getCorporation: (req, res) => {
     Corporation.findOneAsync({'code': req.params.code})
       .then(handleEntityNotFound(res, messages.CORPORATION_NOT_FOUND))
       .then(corporation => {
@@ -98,11 +100,10 @@ module.exports = {
               })
           );
         }
-      })
-      .catch(handleError(res));
+      });
   },
 
-  getClient: function (req, res) {
+  getClient: (req, res) => {
     Corporation.findOneAsync({
       'clients': {
         '$elemMatch': {
@@ -128,19 +129,73 @@ module.exports = {
             _.chain(corporation)
               .pick(CORPORATION_SAFE_KEYS)
               .assignIn({
-                banned: corporation.banned,
-                licenseKey: client.licenseKey,
-                begDate: period.begDate,
-                endDate: period.endDate,
-                remainDays: moment(period.endDate).diff(moment(), 'days')
+                'banned': corporation.banned,
+                'licenseKey': client.licenseKey
+              }, _.omit(period.toObject(), ['_id']), {
+                'remainDays': moment(period.endDate).diff(moment(), 'days')
               }).value()
           );
         }
-      })
-      .catch(handleError(res));
+      });
   },
 
-  linkClient: function (req, res) {
+  setDemo: (req, res) => {
+    var code = req.body.code;
+
+    if (!code) {
+      return res.sendStatus(400);
+    }
+
+    Corporation.findOneAsync({
+      'clients.consumerKey': req.consumerKey
+    })
+      .then(client => {
+        if (client) {
+          return res.status(403)
+            .send(messages.CLIENT_NOT_SUITABLE);
+        }
+
+        Corporation.findOneAsync({code, 'banned': {'$ne': true}})
+          .then(handleEntityNotFound(res, messages.CORPORATION_NOT_FOUND))
+          .then(corporation => {
+            if (!corporation) return;
+
+            License.findOneAsync({'used': {'$ne': true}})
+              .then(handleEntityNotFound(res, messages.LICENSE_KEYS_OVER))
+              .then(license => {
+                if (!license) return;
+
+                var isDemo = true,
+                  begDate = moment(),
+                  endDate = moment(begDate).add(DEMO_DURATION, 'days');
+
+                license.used = true;
+
+                corporation.clients.push({
+                  'consumerKey': req.consumerKey,
+                  'licenseKey': license.licenseKey,
+                  'licensePeriods': [{begDate, endDate, isDemo}]
+                });
+
+                license.saveAsync()
+                  .then(() => {
+                    corporation.saveAsync()
+                      .then(() => {
+                        res.json({
+                          'licenseKey': license.licenseKey,
+                          begDate, endDate,
+                          'remainDays': moment(endDate).diff(moment(), 'days')
+                        });
+                      })
+                      .catch(handleError(res));
+                  })
+                  .catch(handleError(res));
+              });
+          });
+      });
+  },
+
+  linkClient: (req, res) => {
     var code = req.body.code;
     var licenseKey = req.body.licenseKey;
 
@@ -214,13 +269,11 @@ module.exports = {
                   });
               })
               .catch(handleError(res));
-          })
-          .catch(handleError(res));
-      })
-      .catch(handleError(res));
+          });
+      });
   },
 
-  unlinkClient: function (req, res) {
+  unlinkClient: (req, res) => {
     Corporation.findOneAndUpdateAsync(
       {
         'clients': {
@@ -250,12 +303,11 @@ module.exports = {
             .then(() => { res.sendStatus(200); })
             .catch(handleError(res));
         }
-
       })
       .catch(handleError(res));
   },
 
-  createCorporation: function (req, res) {
+  createCorporation: (req, res) => {
     checkCorporationData(req)
       .then(data => {
         Corporation.findOneAsync({
@@ -272,13 +324,12 @@ module.exports = {
             corporation.saveAsync()
               .then(() => { res.sendStatus(200); })
               .catch(handleError(res));
-          })
-          .catch(handleError(res));
+          });
       })
       .catch(handleError(res, 400));
   },
 
-  updateCorporation: function (req, res) {
+  updateCorporation: (req, res) => {
     checkCorporationData(req)
       .then(data => {
         Corporation.findOneAsync({
@@ -307,9 +358,8 @@ module.exports = {
                 .then(() => { res.sendStatus(200); })
                 .catch(handleError(res));
             }
-          })
-          .catch(handleError(res));
+          });
       })
-      .catch(() => { res.sendStatus(400); });
+      .catch(handleError(res, 400));
   }
 }

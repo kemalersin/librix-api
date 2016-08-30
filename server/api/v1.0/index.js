@@ -29,6 +29,7 @@ router.use((req, res, next) => {
 });
 
 router.get('/client', controller.getClient);
+router.post('/client/demo', controller.setDemo);
 router.post('/client/link', controller.linkClient);
 router.post('/client/unlink', controller.unlinkClient);
 router.get('/corporation/:code', controller.getCorporation);
